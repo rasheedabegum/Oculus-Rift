@@ -1,0 +1,735 @@
+import streamlit as st
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from PIL import Image
+import io
+import base64
+from datetime import datetime
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image as RLImage, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from supabase import create_client, Client
+import uuid
+
+# Supabase configuration
+SUPABASE_URL = "https://xahzxcipqkckawzcyzcl.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhhaHp4Y2lwcWtja2F3emN5emNsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDI2NTY5ODMsImV4cCI6MjA1ODIzMjk4M30.J_ND_Jl3MwrR_Yy0v_YC7WwTGJE5dmlJuZcmhJwUvtY"
+
+# Initialize Supabase client
+try:
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error(f"Failed to initialize Supabase client: {str(e)}")
+    supabase = None
+
+# Page configuration
+    st.set_page_config(
+    page_title="Doctor Dashboard",
+    page_icon="👨‍⚕️",
+        layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for styling
+st.markdown("""
+<style>
+    .main {
+        background-color: #f5f5f5;
+    }
+    .stApp {
+        max-width: 1400px;
+        margin: 0 auto;
+    }
+    .dashboard-container {
+        background-color: white;
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+    }
+    .metric-container {
+        background-color: #f0f7ff;
+        border-radius: 8px;
+        padding: 15px;
+        text-align: center;
+    }
+    .report-container {
+        background-color: white;
+        border: 1px solid #ddd;
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 10px;
+    }
+    .patient-info {
+        border-left: 4px solid #3498db;
+        padding-left: 10px;
+        background-color: #f8f9fa;
+    }
+    .section-header {
+        font-size: 1.5rem;
+        font-weight: bold;
+        margin-bottom: 1rem;
+        color: #2c3e50;
+        border-bottom: 2px solid #3498db;
+        padding-bottom: 0.5rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Check if user is logged in
+if 'is_doctor' not in st.session_state or not st.session_state['is_doctor']:
+    st.error("⚠️ You must be logged in as a doctor to access this dashboard")
+        st.stop()
+    
+# Function to fetch patient data
+def fetch_patient_data():
+    try:
+        # Fetch data from Supabase
+        if supabase:
+            response = supabase.table('patients').select('*').execute()
+            if response.data:
+                return pd.DataFrame(response.data)
+        
+        # Fallback demo data if Supabase fails or is empty
+        data = {
+            'patient_id': [f"P{i:04d}" for i in range(1, 11)],
+            'name': ['John Smith', 'Emma Johnson', 'Michael Brown', 'Sarah Davis', 'Robert Wilson', 
+                    'Lisa Martinez', 'David Thompson', 'Jennifer Garcia', 'Richard Miller', 'Susan Anderson'],
+            'age': [45, 32, 67, 28, 54, 41, 59, 36, 72, 39],
+            'condition': ['Hypertension', 'Diabetes', 'Lung Cancer', 'Skin Disease', 'Brain Tumor', 
+                        'Eye Disease', 'Bone Fracture', 'Diabetic Retinopathy', 'Heart Disease', 'Asthma'],
+            'last_visit': pd.date_range(start='2023-12-01', periods=10).strftime('%Y-%m-%d').tolist(),
+            'risk_level': ['Medium', 'Low', 'High', 'Low', 'High', 'Medium', 'Medium', 'High', 'High', 'Low']
+        }
+        return pd.DataFrame(data)
+    except Exception as e:
+        st.error(f"Error fetching patient data: {str(e)}")
+        return pd.DataFrame()
+
+# Function to fetch analysis results
+def fetch_analysis_results():
+    try:
+        # Fetch data from Supabase
+        if supabase:
+            response = supabase.table('analysis_results').select('*').order('date', desc=True).execute()
+            
+            if response.data:
+                # Convert to DataFrame
+                df = pd.DataFrame(response.data)
+                
+                # Add default confidence value if the column doesn't exist
+                if 'confidence' not in df.columns:
+                    df['confidence'] = 0.85  # Default value
+                    
+                # Add default reviewed status if the column doesn't exist
+                if 'reviewed' not in df.columns:
+                    df['reviewed'] = False
+                    
+                return df
+        
+        # Fallback to mock data if Supabase fails or is empty
+        return get_mock_analysis_results()
+    except Exception as e:
+        st.error(f"Error fetching analysis results: {str(e)}")
+        # Return mock data as fallback
+        return get_mock_analysis_results()
+
+# Function to get mock analysis results with updated structure
+def get_mock_analysis_results():
+    # Create mock data with the required structure
+    current_time = datetime.now().isoformat()
+    days_ago = lambda days: (datetime.now() - pd.Timedelta(days=days)).isoformat()
+    
+    mock_data = [
+        {
+            "id": str(uuid.uuid4()),
+            "patient_name": "John Smith",
+            "test_type": "Brain Tumor Analysis",
+            "result": "Abnormal - Potential tumor detected",
+            "date": days_ago(2),
+            "confidence": 0.92,
+            "reviewed": True
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "patient_name": "guest_patient",
+            "test_type": "X-Ray Analysis",
+            "result": "Normal - No abnormalities detected",
+            "date": days_ago(3),
+            "confidence": 0.88,
+            "reviewed": False
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "patient_name": "Sarah Davis",
+            "test_type": "Diabetic Retinopathy Analysis",
+            "result": "Abnormal - Stage 2 retinopathy",
+            "date": days_ago(5),
+            "confidence": 0.78,
+            "reviewed": True
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "patient_name": "guest_patient",
+            "test_type": "Skin Lesion Analysis",
+            "result": "Abnormal - Potential melanoma",
+            "date": days_ago(1),
+            "confidence": 0.75,
+            "reviewed": False
+        },
+        {
+            "id": str(uuid.uuid4()),
+            "patient_name": "Michael Brown",
+            "test_type": "Pneumonia Detection",
+            "result": "Normal - No signs of pneumonia",
+            "date": current_time,
+            "confidence": 0.95,
+            "reviewed": False
+        }
+    ]
+    return pd.DataFrame(mock_data)
+
+# Function to generate PDF medical report
+def generate_medical_report(patient_data, analysis_data, doctor_notes):
+    try:
+        # Create a buffer for the PDF
+        buffer = io.BytesIO()
+        
+        # Create the PDF document
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        elements = []
+        
+        # Add title
+        title_style = ParagraphStyle(
+            'Title',
+            parent=styles['Title'],
+            alignment=TA_CENTER,
+            spaceAfter=20,
+            fontSize=16,
+            textColor=colors.HexColor('#2c3e50')
+        )
+        elements.append(Paragraph("MEDICAL ANALYSIS REPORT", title_style))
+        elements.append(Spacer(1, 0.2 * inch))
+        
+        # Add report date
+        date_style = ParagraphStyle(
+            'Date',
+            parent=styles['Normal'],
+            alignment=TA_CENTER,
+            fontSize=10,
+            textColor=colors.grey
+        )
+        elements.append(Paragraph(f"Report generated on: {datetime.now().strftime('%B %d, %Y')}", date_style))
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Add patient information
+        section_style = ParagraphStyle(
+            'Section',
+            parent=styles['Heading2'],
+            fontSize=12,
+            textColor=colors.HexColor('#3498db')
+        )
+        elements.append(Paragraph("PATIENT INFORMATION", section_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        # Patient info table
+        patient_data = [
+            ["Patient ID:", patient_data.get("patient_id", "N/A")],
+            ["Name:", patient_data.get("name", "N/A")],
+            ["Age:", str(patient_data.get("age", "N/A"))],
+            ["Condition:", patient_data.get("condition", "N/A")],
+            ["Risk Level:", patient_data.get("risk_level", "N/A")]
+        ]
+        
+        patient_table = Table(patient_data, colWidths=[2*inch, 3*inch])
+        patient_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f7ff')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#2c3e50')),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(patient_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Analysis results
+        elements.append(Paragraph("ANALYSIS RESULTS", section_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        # Analysis table
+        analysis_table_data = [
+            ["Detection Type", "Confidence", "Date", "Status"]
+        ]
+        for idx, row in analysis_data.iterrows():
+            status = "Reviewed" if row.get("reviewed", False) else "Pending"
+            analysis_table_data.append([
+                row.get("detection_type", "N/A"),
+                f"{row.get('confidence', 0.0):.0%}",
+                row.get("timestamp", "N/A"),
+                status
+            ])
+        
+        analysis_table = Table(analysis_table_data, colWidths=[2*inch, 1.2*inch, 1.4*inch, 1.4*inch])
+        analysis_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3498db')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f8f9fa')),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+        ]))
+        elements.append(analysis_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Doctor's Notes
+        elements.append(Paragraph("DOCTOR'S NOTES", section_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        notes_style = ParagraphStyle(
+            'Notes',
+            parent=styles['Normal'],
+            fontSize=10,
+            leading=14
+        )
+        elements.append(Paragraph(doctor_notes, notes_style))
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Signature section
+        elements.append(Paragraph("SIGNATURE", section_style))
+        elements.append(Spacer(1, 0.1 * inch))
+        
+        signature_data = [
+            ["Doctor's Signature:", "", "Date:", ""],
+            ["", "", "", ""],
+            ["Doctor's Name:", "Dr. " + st.session_state.get("doctor_name", "Medical Professional"), "", ""]
+        ]
+        
+        signature_table = Table(signature_data, colWidths=[1.5*inch, 2.5*inch, 1*inch, 1*inch])
+        signature_table.setStyle(TableStyle([
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.lightgrey),
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#f0f7ff')),
+            ('TEXTCOLOR', (0, 0), (0, -1), colors.HexColor('#2c3e50')),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (-1, -1), 10),
+            ('SPAN', (1, 1), (3, 1)),
+        ]))
+        elements.append(signature_table)
+        elements.append(Spacer(1, 0.3 * inch))
+        
+        # Disclaimer
+        disclaimer_style = ParagraphStyle(
+            'Disclaimer',
+            parent=styles['Normal'],
+            fontSize=8,
+            textColor=colors.grey,
+            alignment=TA_LEFT
+        )
+        disclaimer_text = """
+        DISCLAIMER: This report contains AI-assisted analysis and should be interpreted by qualified healthcare professionals.
+        The results presented are not a definitive diagnosis and should be validated through additional clinical assessment.
+        Medical decisions should not be based solely on this report without the judgment of a medical specialist.
+        """
+        elements.append(Paragraph(disclaimer_text, disclaimer_style))
+        
+        # Build the PDF
+        doc.build(elements)
+        
+        # Reset buffer position
+        buffer.seek(0)
+        return buffer
+    
+    except Exception as e:
+        st.error(f"Error generating PDF report: {str(e)}")
+        return None
+
+# Main dashboard layout
+st.title("👨‍⚕️ Doctor Dashboard")
+
+# Get data
+patients_df = fetch_patient_data()
+analysis_df = fetch_analysis_results()
+
+# Top row metrics
+col1, col2, col3, col4 = st.columns(4)
+        with col1:
+    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
+    st.metric("Total Patients", len(patients_df))
+    st.markdown("</div>", unsafe_allow_html=True)
+            
+        with col2:
+    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
+    st.metric("Total Analyses", len(analysis_df))
+    st.markdown("</div>", unsafe_allow_html=True)
+            
+        with col3:
+    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
+    high_risk = len(patients_df[patients_df['risk_level'] == 'High'])
+    st.metric("High Risk Patients", high_risk)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with col4:
+    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
+    pending_reviews = len(analysis_df[analysis_df['reviewed'] == False])
+    st.metric("Pending Reviews", pending_reviews)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# Create tabs for dashboard components
+tabs = st.tabs(["📋 Patient List", "🔍 Analysis Results", "📊 Statistics", "📄 Report Generation"])
+
+with tabs[0]:
+    st.markdown("<div class='dashboard-container'>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>Patient Directory</h3>", unsafe_allow_html=True)
+    
+    # Search and filter
+    search_col, filter_col = st.columns([3, 1])
+    with search_col:
+        search_term = st.text_input("Search patients by name or ID", "")
+    with filter_col:
+        risk_filter = st.selectbox("Filter by risk", ["All", "High", "Medium", "Low"])
+    
+    # Apply filters
+    filtered_df = patients_df.copy()
+    if search_term:
+        filtered_df = filtered_df[
+            filtered_df['name'].str.contains(search_term, case=False) | 
+            filtered_df['patient_id'].str.contains(search_term, case=False)
+        ]
+    if risk_filter != "All":
+        filtered_df = filtered_df[filtered_df['risk_level'] == risk_filter]
+    
+    # Display patient table
+    if not filtered_df.empty:
+        st.dataframe(
+            filtered_df,
+            column_config={
+                "patient_id": "Patient ID",
+                "name": "Name",
+                "age": "Age",
+                "condition": "Condition",
+                "last_visit": "Last Visit",
+                "risk_level": st.column_config.SelectboxColumn(
+                    "Risk Level",
+                    options=["Low", "Medium", "High"],
+                    width="medium",
+                )
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No patients match your search criteria.")
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[1]:
+    st.markdown("<div class='dashboard-container'>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>Analysis Results</h3>", unsafe_allow_html=True)
+    
+    # Fetch analysis results (this will include handling for missing columns)
+    analysis_df = fetch_analysis_results()
+    
+    # Filters in three columns
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        # Filter for patient type (guest or registered)
+        patient_type = st.selectbox(
+            "Patient Type",
+            ["All", "Guest", "Registered"],
+        )
+    with col2:
+        # Filter by detection type
+        detection_filter = st.multiselect(
+            "Filter by test type",
+            options=sorted(analysis_df['test_type'].unique().tolist()),
+            default=[]
+        )
+    with col3:
+        # Review status filter
+        review_status = st.radio("Review Status", ["All", "Reviewed", "Pending"], horizontal=True)
+    
+    # Apply filters
+    filtered_analysis = analysis_df.copy()
+    
+    # Filter by patient type
+    if patient_type != "All":
+        if patient_type == "Guest":
+            filtered_analysis = filtered_analysis[filtered_analysis['patient_name'].str.contains('guest', case=False)]
+        else:  # Registered
+            filtered_analysis = filtered_analysis[~filtered_analysis['patient_name'].str.contains('guest', case=False)]
+    
+    # Filter by test type
+    if detection_filter:
+        filtered_analysis = filtered_analysis[filtered_analysis['test_type'].isin(detection_filter)]
+    
+    # Filter by review status
+    if review_status != "All":
+        filtered_analysis = filtered_analysis[
+            filtered_analysis['reviewed'] == (review_status == "Reviewed")
+        ]
+    
+    # Display analysis results
+    if not filtered_analysis.empty:
+        # Format the dataframe for display
+        display_df = filtered_analysis.copy()
+        
+        # Format date for better readability
+        if 'date' in display_df.columns:
+            try:
+                display_df['formatted_date'] = pd.to_datetime(display_df['date']).dt.strftime('%Y-%m-%d %H:%M')
+            except:
+                display_df['formatted_date'] = display_df['date']
+        
+        # Identify patient type
+        display_df['patient_type'] = display_df['patient_name'].apply(
+            lambda x: "Guest" if 'guest' in str(x).lower() else "Registered"
+        )
+        
+        # Show the dataframe with appropriate columns and formatting
+        st.dataframe(
+            display_df,
+            column_config={
+                "id": st.column_config.TextColumn("ID", width="small"),
+                "patient_name": "Patient Name",
+                "patient_type": "Type",
+                "test_type": "Test Type",
+                "result": "Result",
+                "formatted_date": "Date",
+                "confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    format="%.0f%%",
+                    min_value=0,
+                    max_value=1,
+                    width="medium"
+                ),
+                "reviewed": st.column_config.CheckboxColumn("Reviewed", width="small")
+            },
+            use_container_width=True,
+            hide_index=True,
+            column_order=["id", "patient_name", "patient_type", "test_type", "result", "formatted_date", "confidence", "reviewed"]
+        )
+    else:
+        st.info("No analysis results match your filter criteria.")
+    
+    # Review functionality
+    st.subheader("Manage Results")
+    col1, col2 = st.columns(2)
+    
+    # Update review status
+    with col1:
+        st.write("Update Review Status")
+        
+        # Dropdown to select a result to review
+        result_to_review = st.selectbox(
+            "Select result to review", 
+            options=analysis_df['id'].tolist(),
+            format_func=lambda x: f"{analysis_df[analysis_df['id'] == x]['patient_name'].values[0]} - {analysis_df[analysis_df['id'] == x]['test_type'].values[0]}"
+        )
+        
+        # Get current review status
+        current_status = analysis_df[analysis_df['id'] == result_to_review]['reviewed'].values[0]
+        
+        # Button to toggle review status
+        if st.button(f"Mark as {'Unreviewed' if current_status else 'Reviewed'}"):
+            # Only update if connected to Supabase
+            if supabase:
+                try:
+                    # Update the review status in the database
+                    response = supabase.table('analysis_results').update({"reviewed": not current_status}).eq('id', result_to_review).execute()
+                    if response.data:
+                        st.success(f"Status updated to {'Reviewed' if not current_status else 'Unreviewed'}")
+                        st.rerun()  # Refresh the page to show updated data
+                    else:
+                        st.error("Failed to update status")
+                except Exception as e:
+                    # If reviewed column doesn't exist, show a helpful message
+                    st.error(f"Error updating review status: {str(e)}")
+                    if "reviewed" in str(e):
+                        st.info("""
+                        The 'reviewed' column needs to be added to your database schema.
+                        Run this SQL in your Supabase dashboard:
+                        ```
+                        ALTER TABLE analysis_results ADD COLUMN IF NOT EXISTS reviewed BOOLEAN DEFAULT FALSE;
+                        ```
+                        """)
+            else:
+                st.warning("Cannot update status - database connection not available")
+    
+    # Delete functionality
+    with col2:
+        st.write("Delete Result")
+        
+        # Dropdown to select a result to delete
+        result_to_delete = st.selectbox(
+            "Select result to delete", 
+            options=analysis_df['id'].tolist(),
+            format_func=lambda x: f"{analysis_df[analysis_df['id'] == x]['patient_name'].values[0]} - {analysis_df[analysis_df['id'] == x]['test_type'].values[0]}",
+            key="delete_dropdown"  # Unique key to avoid conflict with the review dropdown
+        )
+        
+        # Button to delete the selected result
+        if st.button("Delete Result"):
+            # Only delete if connected to Supabase
+            if supabase:
+                try:
+                    response = supabase.table('analysis_results').delete().eq('id', result_to_delete).execute()
+                    if response.data:
+                        st.success("Result deleted successfully")
+                        st.rerun()  # Refresh to show updated data
+                    else:
+                        st.error("Failed to delete result")
+                except Exception as e:
+                    st.error(f"Error deleting result: {str(e)}")
+            else:
+                st.warning("Cannot delete result - database connection not available")
+
+with tabs[2]:
+    st.markdown("<div class='dashboard-container'>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>Statistics & Insights</h3>", unsafe_allow_html=True)
+    
+    # Charts layout
+    chart_col1, chart_col2 = st.columns(2)
+    
+    with chart_col1:
+        # Detection type distribution
+        st.subheader("Detection Type Distribution")
+        detection_counts = analysis_df['detection_type'].value_counts()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        bars = ax.bar(detection_counts.index, detection_counts.values, color='#3498db')
+        plt.xticks(rotation=45, ha='right')
+        plt.ylabel('Number of Cases')
+        plt.title('Detection Type Distribution')
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.1,
+                    f'{height:.0f}', ha='center', va='bottom')
+        st.pyplot(fig)
+    
+    with chart_col2:
+        # Risk level distribution
+        st.subheader("Patient Risk Level Distribution")
+        risk_counts = patients_df['risk_level'].value_counts()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        colors = ['#2ecc71', '#f39c12', '#e74c3c']  # green, yellow, red
+        explode = (0.1, 0.05, 0)  # explode the High risk slice
+        ax.pie(risk_counts.values, explode=explode, labels=risk_counts.index, 
+              colors=colors, autopct='%1.1f%%', shadow=True, startangle=90)
+        ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+        plt.title('Patient Risk Level Distribution')
+        st.pyplot(fig)
+    
+    # Show confidence trends
+    st.subheader("Average Confidence by Detection Type")
+    avg_confidence = analysis_df.groupby('detection_type')['confidence'].mean().sort_values(ascending=False)
+    fig, ax = plt.subplots(figsize=(10, 6))
+    bars = ax.bar(avg_confidence.index, avg_confidence.values, color='#9b59b6')
+    plt.xticks(rotation=45, ha='right')
+    plt.ylabel('Average Confidence')
+    plt.title('Average Confidence by Detection Type')
+    # Add data labels
+    for bar in bars:
+        height = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                f'{height:.2f}', ha='center', va='bottom')
+    st.pyplot(fig)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+with tabs[3]:
+    st.markdown("<div class='dashboard-container'>", unsafe_allow_html=True)
+    st.markdown("<h3 class='section-header'>Medical Report Generation</h3>", unsafe_allow_html=True)
+    
+    # Select patient for report
+    patient_id = st.selectbox(
+        "Select Patient", 
+        options=patients_df['patient_id'].tolist(),
+        format_func=lambda x: f"{x} - {patients_df[patients_df['patient_id'] == x]['name'].values[0]}"
+    )
+    
+    # Get selected patient data
+    selected_patient = patients_df[patients_df['patient_id'] == patient_id].iloc[0].to_dict()
+    
+    # Get patient analysis data
+    patient_analysis = analysis_df[analysis_df['patient_id'] == patient_id]
+    
+    # Display patient information
+    st.markdown("<div class='patient-info'>", unsafe_allow_html=True)
+    st.markdown(f"**Patient ID:** {selected_patient['patient_id']}")
+    st.markdown(f"**Name:** {selected_patient['name']}")
+    st.markdown(f"**Age:** {selected_patient['age']}")
+    st.markdown(f"**Condition:** {selected_patient['condition']}")
+    st.markdown(f"**Risk Level:** {selected_patient['risk_level']}")
+    st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Display analysis results
+    st.subheader("Analysis Results")
+    if not patient_analysis.empty:
+        st.dataframe(
+            patient_analysis,
+            column_config={
+                "detection_type": "Detection Type",
+                "confidence": st.column_config.ProgressColumn(
+                    "Confidence",
+                    format="%.0f%%",
+                    min_value=0,
+                    max_value=1,
+                ),
+                "timestamp": "Date",
+                "reviewed": "Reviewed"
+            },
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.info("No analysis results found for this patient.")
+    
+    # Doctor's notes
+    st.subheader("Doctor's Notes")
+    doctor_notes = st.text_area(
+        "Add your notes and observations (will be included in the report)", 
+        height=150
+    )
+    
+    # Generate report button
+    if st.button("Generate Medical Report"):
+        if doctor_notes.strip() == "":
+            st.warning("Please add doctor's notes before generating the report.")
+        else:
+            # Generate PDF report
+            pdf_buffer = generate_medical_report(selected_patient, patient_analysis, doctor_notes)
+            
+            if pdf_buffer:
+                # Provide download link
+                st.success("Medical report generated successfully!")
+                
+                # Encode the PDF buffer to base64
+                b64_pdf = base64.b64encode(pdf_buffer.getvalue()).decode('utf-8')
+                
+                # Generate PDF filename
+                now = datetime.now().strftime("%Y%m%d_%H%M%S")
+                pdf_filename = f"medical_report_{selected_patient['patient_id']}_{now}.pdf"
+                
+                # Create download link
+                href = f'<a href="data:application/pdf;base64,{b64_pdf}" download="{pdf_filename}" style="display: inline-block; padding: 0.5rem 1rem; background-color: #3498db; color: white; text-decoration: none; border-radius: 4px; cursor: pointer; margin-top: 1rem;">📄 Download Medical Report</a>'
+                st.markdown(href, unsafe_allow_html=True)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# Footer
+st.markdown("---")
+st.markdown(f"<p style='text-align: center; color: gray;'>© {datetime.now().year} CareAI Medical Dashboard • Version 1.0</p>", unsafe_allow_html=True) 

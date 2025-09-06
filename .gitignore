@@ -1,0 +1,38 @@
+# Ignore sensitive files
+client_secret*.json
+*.db
+# API Keys
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+.config/
+.devcontainer/
+.streamlit/
+*.pt
+*.gif
+*.jpg
+*.png
+*.pptx
